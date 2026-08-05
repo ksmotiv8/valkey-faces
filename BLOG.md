@@ -1,4 +1,4 @@
-# Your cache has been a vector database all along
+# Valkey is a surprisingly good face recognizer
 
 We live in an era where nothing ought to faze us about what's possible with AI. But back in my day, when I was a roboticist at NASA Jet Propulsion Laboratory, working on the cameras for Mars rovers, computer vision was one of the coolest AI things to do. The first lesson in any Computer Vision class was to write a super simple example in OpenCV to detect a face. It was the most satisfying intro for anyone new to computer vision. 
 
