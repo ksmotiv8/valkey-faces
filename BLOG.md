@@ -1,21 +1,26 @@
 # Your cache has been a vector database all along
 
+We live in an era where nothing ought to phase us about what's possible with AI. But back in my days, when I was a roboticist at NASA Jet Propulsion Laboratory, working on the cameras for Mars rovers, computer vision was one of the coolest AI things to do. The first lesson in any Computer Vision class was to write a super simple example in OpenCV to detect a face. It was the most satisfying intro for anyone new to computer vision. 
+
+While detecting a face was easy (even though it would almost always recognize a smily face drawn on a paper as a face as well), the more fun part was the exercise to recognize a face. This is when you go from a White Belt in computer vision to a Yellow Belt, building upon what you have been learning all along. 
+
+Face recognition can be used for all kinds of fun robotics projects. In fact, my supervisor at JPL had an automatic door opener upon recognizing an authorized user, as a pretty meaningful portion of his masters thesis at MIT. The algorithm is quite simple and it is one of the best ways to learn about vector indexes: 
+
+Your webcam is feeding you videos, which are essentially series of pictures. You can choose a couple of frames each second, detect a face (or faces) in the frame, and then pass it through an embedding model to represent a face as a series of numbers, aka a vector. Once the face is converted into a vector, you can search through your indexed faces to see if it is close enough to a face that you have knowledge of. If there is a high confidence match, you declare a very satisfying victory, and if there isn't, you can always ask the user for their name to register them so you can recognize them next time.
+
+I have been having (way too much) fun with Valkey vector index, including optimizing them for indexing and searches by prefetching and taking advantage of optimized instruction sets. Valkey makes a great vector index that can essentially index ever face in the world, if you needed to, and respond to your queries in real time. 
+
+This blog post covers an illustrative guide on how you can point your camera at yourself, and have the terminal print `+PERSON entered` when it recognizes them. It is super simple. All it takes is Valkey, a few lines of python, an embedding model, and a 600 line rust binary to make it all happen/ 
+
+
 This is a post about teaching my laptop to greet me by name. Mostly,
 though, it is a post about Valkey search, because the face part turned
 out to be the easy part.
 
-Last month I wrote about pushing Valkey to 200 Gbps on large GETs.
-Line-rate benchmarks are one kind of fun. This weekend I wanted the
-other kind: point my camera at my face and have the terminal print
-`+ Khawaja entered`. That used to take a dedicated vector database, a
-Python environment, a GPU, and a weekend of glue. It now takes one Rust
-binary of about 600 lines, two small models, and the Valkey instance I
-already run. The interesting question is not how the face models work.
-It is what happened to the vector database.
 
-## The centerpiece: Valkey search
+## Enter Valkey search
 
-The Valkey project ships a search module, and the
+ Valkey  ships a search module, and the
 `valkey/valkey-bundle` image has it loaded out of the box. Getting a
 vector database is now:
 
