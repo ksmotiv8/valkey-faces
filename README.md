@@ -89,8 +89,9 @@ Global flags: `--url` (default `redis://127.0.0.1:6379`), `--threshold`
 - Code is MIT. The downloaded models keep their own licenses (the
   InsightFace embedder is distributed for research/educational use).
 - Curious when HNSW beats brute-force FLAT? See
-  [EXPERIMENTS.md](EXPERIMENTS.md): the latency crossover is ~1-2k
-  vectors, and for recognition HNSW's approximation costs nothing.
+  [EXPERIMENTS.md](EXPERIMENTS.md): the crossover is ~250 vectors,
+  HNSW's median is 57x faster at 50k (but watch p999), and for
+  recognition its approximation costs nothing.
 - Born as a module of the
   [momento-face-workshop](https://github.com/ksmotiv8/momento-face-workshop),
   where an agent-driven curriculum builds this system step by step.

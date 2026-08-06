@@ -6,87 +6,110 @@ graph index. `valkey-faces` uses HNSW, but for seven faces that is
 overkill, so the honest question is: at what scale does HNSW start to
 win, and what do you give up?
 
-I measured it. 512-D unit vectors (face-embedding shaped), cosine
+I measured it. 512-D unit vectors (face-embedding shaped: points cluster
+around identities, queries are held-out photos of known people), cosine
 distance, KNN, on `valkey/valkey-bundle`. Numbers are from one machine
-and meant to show shape, not to be your benchmark. Reproduce with
-`experiments/bench.py`.
+and meant to show shape, not to be your benchmark. Reproduce with the
+scripts in `experiments/`.
 
 ## Latency: FLAT is linear, HNSW is flat
 
-The clearest result, consistent across every run:
+FLAT scales with N; HNSW barely moves. Medians over thousands of queries:
 
-| Vectors | FLAT p50 | HNSW p50 | speedup |
+| Vectors | FLAT p50 | HNSW p50 | median speedup |
 |--------:|---------:|---------:|--------:|
-| 1,000   | 0.18 ms  | 0.12 ms  | 1.5x |
-| 5,000   | 0.58 ms  | 0.13 ms  | 4.3x |
-| 10,000  | 1.2 ms   | 0.14 ms  | 9x |
-| 25,000  | 4.1 ms   | 0.16 ms  | 26x |
-| 50,000  | 8.4 ms   | 0.18 ms  | 46x |
-| 100,000 | 17 ms    | 0.2 ms   | 74x |
+| 100     | 0.077 ms | 0.084 ms | FLAT wins |
+| 500     | 0.127 ms | 0.092 ms | 1.4x |
+| 1,000   | 0.173 ms | 0.104 ms | 1.7x |
+| 10,000  | 1.20 ms  | 0.133 ms | 9x |
+| 50,000  | 8.33 ms  | 0.147 ms | 57x |
 
-FLAT scales with N, exactly as brute force must: double the vectors,
-double the query time. HNSW stays near flat, a couple hundred
-microseconds whether it holds a thousand vectors or a hundred thousand.
+The crossover is low: around 250 vectors on the median. FLAT wins at 100,
+they tie in the low hundreds, and HNSW wins everywhere above. FLAT's cost
+doubles with the data; HNSW's holds near 0.15 ms whether it stores a
+hundred vectors or fifty thousand.
 
-The crossover is around 1,000 to 2,000 vectors, and it is not close by
-10,000. Below a few thousand, FLAT is fine and its answers are exact.
-For a family photo library or a door that knows the household, use FLAT
-and skip this whole discussion. Past ten thousand faces, HNSW is the
-difference between a millisecond and a stall.
+## But look at the tails before you trust the median
 
-## Recall: the subtle part, and why recognition does not care
+p50 flatters HNSW. The picture at p99 and p999 is more honest:
 
-Approximate indexes trade accuracy for speed. Measuring that trade
-honestly took three tries, and the failures were the interesting part.
+| N | FLAT p50 / p99 / p999 | HNSW p50 / p99 / p999 |
+|--:|:--|:--|
+| 100    | 0.077 / 0.110 / 0.80 | 0.084 / 0.139 / 0.90 |
+| 500    | 0.127 / 0.169 / 0.90 | 0.092 / 0.141 / 0.89 |
+| 1,000  | 0.173 / 0.226 / 1.01 | 0.104 / 0.159 / 0.95 |
+| 10,000 | 1.20 / 1.97 / 2.10   | 0.133 / 2.26 / 3.84 |
+| 50,000 | 8.33 / 9.04 / 9.55   | 0.147 / 2.58 / 3.93 |
 
-**First surprise: random vectors are a trap.** My first data was random
-Gaussian points. HNSW recall looked catastrophic, near zero. The cause
-is the curse of dimensionality: in 512 dimensions, random points are all
-nearly equidistant, so there is no neighborhood structure for the graph
-to exploit and no meaningful "nearest" for FLAT to find either. Real
-face embeddings are not random. The same person's photos cluster
-tightly, and that structure is exactly what HNSW navigates. Benchmark on
-data shaped like your real data or you will measure noise.
+Two things fall out. FLAT's tail is tight: p50 and p999 nearly touch
+(8.3 to 9.5 ms at 50k) because brute force does identical work every
+query. HNSW's tail is fat relative to its median (0.15 ms to 3.9 ms, a
+26x spread) because graph traversal is variable; some queries wander
+farther than others. So at 50k HNSW is 57x faster at the median but only
+about 2.4x faster at p999. If your SLA is written on the tail, plan
+against that smaller number, not the headline.
 
-**Second surprise: recall@1 is the wrong metric for recognition.** With
-realistic clusters (500 identities, 100 photos each, queries are
-held-out photos of known people), at N=50,000:
+At small N the ~0.8-0.9 ms p999 is identical for both, because it is not
+the index at all. It is the redis round-trip, scheduling, and GC. Below
+a thousand vectors you are measuring the harness, not the algorithm.
 
-| EF_RUNTIME | recall@1 | named right person | p50 ms |
-|-----------:|---------:|-------------------:|-------:|
-| default    | 0.33     | 0.99               | 0.18 |
-| 20         | 0.33     | 1.00               | 0.20 |
-| 50         | 0.33     | 1.00               | 0.31 |
-| 100        | 0.33     | 1.00               | 0.52 |
-| 200        | 0.36     | 1.00               | 2.95 |
+## Recall: high when small, approximate when large, right where it counts
 
-FLAT named the right person 200 out of 200, exactly. HNSW found the
-exact nearest vector only a third of the time, yet named the right
-person 99 to 100 percent of the time. Those are not in tension. When a
-person has a hundred photos in the index, HNSW returning photo #47
-instead of the true-nearest photo #12 is a recall@1 "miss" and a
-recognition success: both are the same face. You do not need the nearest
-vector. You need a vector from the right cluster, and clusters are dense.
+Approximate indexes trade accuracy for speed. Three columns tell the
+story: recall@1 (did HNSW return the exact nearest vector), recall@10
+(overlap with the true top ten), and right-person (did it name the
+correct identity, which is the only thing recognition asks).
 
-`EF_RUNTIME` is the dial if you ever do need exact-nearest: higher
-values widen the graph search, buying recall at a latency cost. For
-recognition you can leave it at the default and pay nothing.
+| Vectors | recall@1 | recall@10 | right person |
+|--------:|---------:|----------:|-------------:|
+| 100     | 0.836    | 0.837     | 1.000 |
+| 500     | 0.942    | 0.912     | 1.000 |
+| 1,000   | 0.934    | 0.908     | 1.000 |
+| 10,000  | 0.226    | 0.248     | 1.000 |
+| 50,000  | 0.356    | 0.343     | 0.992 |
 
-## Build cost, the one place HNSW is worse
+At small scale HNSW is nearly exact: 84 to 94 percent recall@1. As the
+index grows, exact-nearest recall falls hard, because a bigger, denser
+graph has more near-duplicate vectors for the search to lose the true
+nearest among. And it does not matter. Right-person stays at 0.99 to
+1.00 across every size. When an identity has a hundred photos in the
+index, HNSW returning photo #47 instead of the true-nearest photo #12 is
+a recall@1 miss and a recognition success: both are the same face. You
+do not need the nearest vector. You need a vector from the right
+cluster, and clusters are dense. `EF_RUNTIME` is the dial if you ever
+need exact-nearest back (higher widens the graph search, buying recall
+for latency), but recognition can leave it at the default and pay
+nothing.
+
+## Two methodology traps I hit, because they will bite you too
+
+**Random vectors are a lie.** My first data was random Gaussian points,
+and HNSW recall looked catastrophic, near zero. The curse of
+dimensionality: in 512 dimensions random points are all nearly
+equidistant, so there is no neighborhood for the graph to exploit and no
+meaningful nearest for FLAT to find either. Real embeddings cluster.
+Benchmark on data shaped like your real data or you measure noise.
+
+**recall@1 is the wrong metric for recognition.** Chasing it would have
+sent me tuning `EF_RUNTIME` up and paying latency for an accuracy the
+application does not use. The metric that matches the task, right-person,
+was already at 1.0.
+
+## Build cost, the one place HNSW is plainly worse
 
 HNSW builds a navigation graph as it ingests, so loading is slower than
-FLAT, and slowest exactly when clusters are tight (many near-equidistant
-candidates to link). At 50,000 tightly clustered vectors, FLAT ingest
-was about a second; HNSW took several. This rarely matters (you build
-once and query forever), but if you rebuild a large index constantly, it
-is real.
+FLAT, and slowest when clusters are tight (many near-equidistant
+candidates to link). At 50,000 tightly clustered vectors FLAT ingest was
+about a second; HNSW took several. You build once and query forever, so
+this rarely matters, but a constantly rebuilt large index would feel it.
 
 ## The one-paragraph answer
 
-Under a few thousand vectors, use FLAT: exact answers, no tuning, and the
-latency is already sub-millisecond. Past ten thousand, use HNSW: query
-time stays flat while FLAT climbs linearly, and for recognition the
-approximation costs you nothing, because naming the right person only
-needs a neighbor from the right cluster, not the single closest vector.
-`valkey-faces` ships HNSW because it is built to scale past the demo, but
-for the demo itself, FLAT would have been the honest choice.
+Under a couple hundred vectors, use FLAT: exact, no tuning, already
+sub-millisecond, and its predictable tail can beat HNSW's. Past a few
+thousand, use HNSW: the median stays flat while FLAT climbs linearly,
+and for recognition the approximation costs nothing, because naming the
+right person needs a neighbor from the right cluster, not the single
+closest vector. Watch the p999 if you live there. `valkey-faces` ships
+HNSW because it is built to scale past the demo. For the demo itself,
+FLAT would have been the honest choice.
